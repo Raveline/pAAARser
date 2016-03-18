@@ -1,0 +1,3 @@
+bs4=4.4.1
+requests
+ebooklib=0.15

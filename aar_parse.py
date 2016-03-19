@@ -46,8 +46,9 @@ class AARParser(object):
 
     def parse_summary_and_toc(self):
         logger.info('Parsing summary at %s', self.base_url)
-        thread_id = self.base_url[self.base_url.rfind('.'):]
-        thread_id = ''.join([c for c in thread_id if c.isdigit()])
+        thread_id_start = self.base_url.rfind('.')
+        thread_id_end = self.base_url.rfind('/')
+        thread_id = self.base_url[thread_id_start + 1:thread_id_end]
         soup = self.soup_for(self.base_url)
         introduction = soup.article
         try:
@@ -71,7 +72,8 @@ class AARParser(object):
                 tag_a['href'] = 'chapter_%d.xhtml' % chapter_count
                 chapter_count += 1
             else:
-                logger.warning('Rejecting link %s', href)
+                logger.warning('Rejecting link %s not linked to thread id %s',
+                               href, thread_id)
         self.get_images(introduction)
         self.chapters_content.append(('Introduction', introduction.prettify()))
         logger.info('Summary parsed.')

@@ -24,14 +24,13 @@ Should do the trick (execute this as root if you're not in a virtual environment
 
 ## Usage
 
-Pick the URL of the thread and do:
+This script will only work with AAR with a table of content, and the table of content has to be in the first page of the thread (but not necessarily in the first post).
+
+Get the URL of the thread and do:
 
     python aar_parse.py <url>
 
-(Or simply make the script executable and call it directly)
-
-Then wait (depending on the size of the AAR and the quantity of images). The epub will appear in the current
-directory.
+Then wait (depending on the size of the AAR and the quantity of images). The epub will appear in the current directory.
 
 (NB : your mileage may vary, but you can of course report any bug on the issue page).
 

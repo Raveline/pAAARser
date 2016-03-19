@@ -98,7 +98,8 @@ class AARParser(object):
     def parse_chapters(self):
         for name, url in self.all_chapters_url:
             content = self.parse_chapter(url)
-            self.chapters_content.append((name, content))
+            if content:
+                self.chapters_content.append((name, content))
 
     def parse_chapter(self, url):
         """
@@ -106,7 +107,9 @@ class AARParser(object):
         where the post lives, and extract the given post information.
         """
         soup = self.soup_for(url)
-        id_post = url[url.rfind('#') + 1:].replace('post', 'post-')
+        id_post = url[url.rfind('#') + 1:]
+        if id_post.find('post-') == -1:
+            id_post = id_post.replace('post', 'post-')
         logger.info('Parsing post #%s at %s', id_post, url)
         post = soup.find(id=id_post)
         if post and hasattr(post, 'article'):

@@ -34,7 +34,7 @@ class AARParser(object):
         self.chapters_content = []
         self.images = {}
 
-        self.parse_summary()
+        self.parse_summary_and_toc()
         self.parse_chapters()
 
     def soup_for(self, url):
@@ -44,17 +44,12 @@ class AARParser(object):
             raise Exception('Could not access post at %s. Cause : %s', url, exc)
         return BeautifulSoup(html, "lxml")
 
-    def parse_chapters(self):
-        for name, url in self.all_chapters_url:
-            self.chapters_content.append((name, self.parse_chapter(url)))
-            self.parse_chapter(url)
-
-    def parse_summary(self):
+    def parse_summary_and_toc(self):
         logger.info('Parsing summary at %s', self.base_url)
         thread_id = self.base_url[self.base_url.rfind('.'):]
         thread_id = ''.join([c for c in thread_id if c.isdigit()])
         soup = self.soup_for(self.base_url)
-        self.introduction = soup.article
+        introduction = soup.article
         try:
             self.title = soup.find('h1').text
             self.author = soup.find('h3').find('a').text
@@ -63,7 +58,7 @@ class AARParser(object):
 
         toc_post = self.identify_toc(soup)
         all_chapters_link = toc_post.find_all('a')
-        chapter_count = 0
+        chapter_count = 1
         for tag_a in all_chapters_link:
             # Sometimes, there will be a link to another thread or something
             # entirely different in the TOC. Let's only take link in the same
@@ -76,10 +71,10 @@ class AARParser(object):
                 tag_a['href'] = 'chapter_%d.xhtml' % chapter_count
                 chapter_count += 1
             else:
-                logger.warning('Rejecting link %s' % href)
-        self.get_images(self.introduction)
-        self.introduction = self.introduction.prettify()
-        logger.info('Summary parsed !')
+                logger.warning('Rejecting link %s', href)
+        self.get_images(introduction)
+        self.chapters_content.append(('Introduction', introduction.prettify()))
+        logger.info('Summary parsed.')
 
     def identify_toc(self, first_page):
         """
@@ -98,6 +93,11 @@ class AARParser(object):
             articles_and_count.append((article, len(all_links)))
         return max(articles_and_count, key=operator.itemgetter(1))[0]
 
+    def parse_chapters(self):
+        for name, url in self.all_chapters_url:
+            self.chapters_content.append((name, self.parse_chapter(url)))
+            self.parse_chapter(url)
+
     def parse_chapter(self, url):
         """
         Given an internal link to a post on Paradox forums, read the HTML page
@@ -108,10 +108,16 @@ class AARParser(object):
         logger.info('Parsing post #%s at %s', id_post, url)
         post = soup.find(id=id_post)
         self.get_images(post.article)
-        logger.info('Done.', id_post, url)
+        logger.info('Done.')
         return post.article.prettify()
 
     def get_images(self, article_soup):
+        """
+        Try to get every images contained in an "article" tag.
+        Change the src path for those images so they're properly displayed
+        in the epub (and not loaded from the Internet, where things, and
+        particularly images, tend to disappear suddenly).
+        """
         to_delete = []
         for img in article_soup.find_all('img'):
             img_src = img.get('src')
@@ -130,6 +136,9 @@ class AARParser(object):
             void_imgs.extract()
 
     def download_image(self, url):
+        """
+        Download an image from its url, store it in a temporary folder.
+        """
         # Cache images to avoid downloading the same one multiple times
         if url in self.images.keys():
             return self.images[url]
@@ -147,6 +156,9 @@ class AARParser(object):
 
 
 def to_epub(parser):
+    """
+    God this function is ugly.
+    """
     author = parser.author
     title = parser.title
 

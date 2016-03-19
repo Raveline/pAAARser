@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 # -*- coding:utf-8 -*-
 import traceback
+import operator
 import os
 import logging
 import sys
@@ -44,13 +45,14 @@ class AARParser(object):
         return BeautifulSoup(html, "lxml")
 
     def parse_chapters(self):
-        #  for name, url in self.all_chapters_url:
-        #    self.parse_chapter(url)
-        self.first_chapter = self.parse_chapter(self.all_chapters_url[0][1])
-        self.chapters_content.append((self.all_chapters_url[0][0], self.first_chapter))
+        for name, url in self.all_chapters_url:
+            self.chapters_content.append((name, self.parse_chapter(url)))
+            self.parse_chapter(url)
 
     def parse_summary(self):
         logger.info('Parsing summary at %s', self.base_url)
+        thread_id = self.base_url[self.base_url.rfind('.'):]
+        thread_id = ''.join([c for c in thread_id if c.isdigit()])
         soup = self.soup_for(self.base_url)
         self.introduction = soup.article
         try:
@@ -59,13 +61,42 @@ class AARParser(object):
         except:
             logger.warning('Could not read the author or the title')
 
-        all_chapters_link = self.introduction.find_all('a')
+        toc_post = self.identify_toc(soup)
+        all_chapters_link = toc_post.find_all('a')
+        chapter_count = 0
         for tag_a in all_chapters_link:
-            self.all_chapters_url.append((tag_a.text, tag_a.get('href')))
-            tag_a.extract()
+            # Sometimes, there will be a link to another thread or something
+            # entirely different in the TOC. Let's only take link in the same
+            # thread.
+            href = tag_a.get('href')
+            if href.find(thread_id) >= 0:
+                self.all_chapters_url.append((tag_a.text, href))
+                # Replace the link so it becomes a local, epub one
+                # (only works if introduction and TOC are in the same place)
+                tag_a['href'] = 'chapter_%d.xhtml' % chapter_count
+                chapter_count += 1
+            else:
+                logger.warning('Rejecting link %s' % href)
         self.get_images(self.introduction)
         self.introduction = self.introduction.prettify()
         logger.info('Summary parsed !')
+
+    def identify_toc(self, first_page):
+        """
+        The TOC is not ALWAYS in the first post of the thread, so we need
+        to be able to detect the post containing the TOC.
+        We will use a basic heuristic : the TOC is the article on first
+        page with the most links. NB: if the TOC is not on the first page, we
+        are screwed.
+        """
+        all_first_page_articles = first_page.find_all('article')
+        # Use a list rather than a dict ot have article in order
+        # Chances are, the first article with the most link is the TOC
+        articles_and_count = []
+        for article in all_first_page_articles:
+            all_links = article.find_all('a')
+            articles_and_count.append((article, len(all_links)))
+        return max(articles_and_count, key=operator.itemgetter(1))[0]
 
     def parse_chapter(self, url):
         """
@@ -74,9 +105,10 @@ class AARParser(object):
         """
         soup = self.soup_for(url)
         id_post = url[url.rfind('#') + 1:].replace('post', 'post-')
-        logger.info('Looking for post #%s at %s', id_post, url)
+        logger.info('Parsing post #%s at %s', id_post, url)
         post = soup.find(id=id_post)
         self.get_images(post.article)
+        logger.info('Done.', id_post, url)
         return post.article.prettify()
 
     def get_images(self, article_soup):
@@ -101,7 +133,7 @@ class AARParser(object):
         # Cache images to avoid downloading the same one multiple times
         if url in self.images.keys():
             return self.images[url]
-        logger.info('Trying to download image at %s', url)
+        logger.info('Downloading image at %s', url)
         r = requests.get(url, stream=True)
         if r.status_code == 200:
             img_name = url[url.rfind('/') + 1:]
@@ -117,8 +149,6 @@ class AARParser(object):
 def to_epub(parser):
     author = parser.author
     title = parser.title
-    chapters = [('Introduction', parser.introduction),
-                parser.chapters_content[0]]
 
     book = epub.EpubBook()
     book.set_title(title)
@@ -126,7 +156,7 @@ def to_epub(parser):
     book.add_author(author)
     chapters_info = []
     chapters_obj = []
-    for idx, (sub_title, html_parsed) in enumerate(chapters):
+    for idx, (sub_title, html_parsed) in enumerate(parser.chapters_content):
         file_name = 'chapter_%d.xhtml' % idx
         c = epub.EpubHtml(title=sub_title, file_name=file_name)
         c.content = html_parsed

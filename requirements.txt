@@ -1,3 +1,4 @@
-bs4=4.4.1
+bs4
 requests
-ebooklib=0.15
+ebooklib==0.15
+ndg-httpsclient

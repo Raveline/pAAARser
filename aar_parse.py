@@ -66,11 +66,15 @@ class AARParser(object):
             # thread.
             href = tag_a.get('href')
             if href.find(thread_id) >= 0:
-                self.all_chapters_url.append((tag_a.text, href))
-                # Replace the link so it becomes a local, epub one
-                # (only works if introduction and TOC are in the same place)
-                tag_a['href'] = 'chapter_%d.xhtml' % chapter_count
-                chapter_count += 1
+                try:
+                    urlparse(href)
+                    self.all_chapters_url.append((tag_a.text, href))
+                    # Replace the link so it becomes a local, epub one
+                    # (only works if introduction and TOC are in the same place)
+                    tag_a['href'] = 'chapter_%d.xhtml' % chapter_count
+                    chapter_count += 1
+                except ValueError:
+                    logger.warning('Rejected invalid URL : %s' % href)
             else:
                 logger.warning('Rejecting link %s not linked to thread id %s',
                                href, thread_id)

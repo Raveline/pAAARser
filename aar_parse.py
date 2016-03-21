@@ -1,5 +1,6 @@
 #!/usr/bin/env python
 # -*- coding:utf-8 -*-
+import multiprocessing
 import traceback
 import operator
 import os
@@ -22,6 +23,14 @@ logger.setLevel(logging.INFO)
 PARADOX_FORUM = 'forum.paradoxplaza.com'
 
 
+class Image(object):
+    def __init__(self, url, path_dir):
+        self.url = url
+        self.name = url[url.rfind('/') + 1:]
+        self.path = os.path.join(path_dir, self.name)
+        self.downloaded = False
+
+
 class AARParser(object):
     def __init__(self, temp_dir, base_url):
         if not urlparse(base_url).hostname == PARADOX_FORUM:
@@ -30,12 +39,18 @@ class AARParser(object):
         self.title = 'Unknown'
         self.author = 'Unknown'
         self.base_url = base_url
-        self.all_chapters_url = []
-        self.chapters_content = []
-        self.images = {}
+
+        self.chapters_to_process = []
+        self.processed_chapters = {}
+
+        self.images_to_process = []
+        self.known_images_url = set()
+        self.processed_images = {}
 
         self.parse_summary_and_toc()
         self.parse_chapters()
+        self.download_all_images()
+        self.fix_links()
 
     def soup_for(self, url):
         try:
@@ -59,7 +74,6 @@ class AARParser(object):
 
         toc_post = self.identify_toc(soup)
         all_chapters_link = toc_post.find_all('a')
-        chapter_count = 1
         for tag_a in all_chapters_link:
             # Sometimes, there will be a link to another thread or something
             # entirely different in the TOC. Let's only take link in the same
@@ -68,19 +82,20 @@ class AARParser(object):
             if href.find(thread_id) >= 0:
                 try:
                     urlparse(href)
-                    self.all_chapters_url.append((tag_a.text, href))
-                    # Replace the link so it becomes a local, epub one
-                    # (only works if introduction and TOC are in the same place)
-                    tag_a['href'] = 'chapter_%d.xhtml' % chapter_count
-                    chapter_count += 1
+                    self.chapters_to_process.append((tag_a.text, href))
                 except ValueError:
                     logger.warning('Rejected invalid URL : %s' % href)
             else:
                 logger.warning('Rejecting link %s not linked to thread id %s',
                                href, thread_id)
-        self.get_images(introduction)
-        self.chapters_content.append(('Introduction', introduction.prettify()))
+        self.parse_images(introduction)
+        self.add_chapter(self.base_url, 'Introduction', introduction, 0)
         logger.info('Summary parsed.')
+
+    def add_chapter(self, url, name, soup, order):
+        self.processed_chapters[url] = {
+            'name': name, 'soup': soup, 'order': order
+        }
 
     def identify_toc(self, first_page):
         """
@@ -100,10 +115,12 @@ class AARParser(object):
         return max(articles_and_count, key=operator.itemgetter(1))[0]
 
     def parse_chapters(self):
-        for name, url in self.all_chapters_url:
+        for idx, (name, url) in enumerate(self.chapters_to_process):
             content = self.parse_chapter(url)
             if content:
-                self.chapters_content.append((name, content))
+                self.add_chapter(url, name, content, idx + 1)
+            else:
+                logger.warning('Could not find content in post at %s' % url)
 
     def parse_chapter(self, url):
         """
@@ -117,54 +134,81 @@ class AARParser(object):
         logger.info('Parsing post #%s at %s', id_post, url)
         post = soup.find(id=id_post)
         if post and hasattr(post, 'article'):
-            self.get_images(post.article)
             logger.info('Done.')
-            return post.article.prettify()
+            self.parse_images(post.article)
+            return post.article
         else:
             logger.warning('Cannot find article for post %s' % id_post)
 
-    def get_images(self, article_soup):
+    def parse_images(self, article_soup):
         """
         Try to get every images contained in an "article" tag.
         Change the src path for those images so they're properly displayed
         in the epub (and not loaded from the Internet, where things, and
         particularly images, tend to disappear suddenly).
         """
-        to_delete = []
         for img in article_soup.find_all('img'):
             img_src = img.get('src')
-            # If there is no hostname, it's probably a smiley or any image
-            # directly hosted on the forum; we don't want those.
-            hostname = urlparse(img_src).hostname
-            if img_src and hostname:
-                image_name = self.download_image(img_src)
-                if not image_name:
-                    to_delete.append(img)
-                else:
-                    img['src'] = os.path.join('images/%s' % image_name)
-            else:
-                to_delete.append(img)
-        for void_imgs in img:
-            void_imgs.extract()
+            if img_src not in self.known_images_url:
+                # If there is no hostname, it's probably a smiley or any image
+                # directly hosted on the forum; we don't want those.
+                hostname = urlparse(img_src).hostname
+                if img_src and hostname:
+                    self.images_to_process.append(Image(img_src, self.temp_dir))
+                    self.known_images_url.add(img_src)
 
-    def download_image(self, url):
+    def download_all_images(self):
+        """
+        Multiprocess getting the image to avoid losing too much time
+        on network wait
+        """
+        manager = multiprocessing.Manager()
+        processes = []
+        results = manager.list()
+        for img in self.images_to_process:
+            processes.append(multiprocessing.Process(
+                target=self.download_image,
+                args=(img, results))
+            )
+        for p in processes:
+            p.start()
+        for p in processes:
+            p.join()
+        self.processed_images = {img.url: img
+                                 for img in results if img.downloaded}
+
+    def fix_links(self):
+        for element in self.processed_chapters.values():
+            # Replace image links
+            for img in element['soup'].find_all('img'):
+                new_link = self.processed_images.get(img['src'])
+                if new_link:
+                    img['src'] = os.path.join('images/%s' % new_link.name)
+                else:
+                    logger.warning('Image %s could not be downloaded, will be'
+                                   ' removed.', img['src'])
+                    img.extract()
+            for a in element['soup'].find_all('a'):
+                internal_dest = self.processed_chapters.get(a.get('href'))
+                if internal_dest:
+                    a['href'] = 'chapter_%d.xhtml' % internal_dest['order']
+
+    def download_image(self, image, results):
         """
         Download an image from its url, store it in a temporary folder.
         """
-        # Cache images to avoid downloading the same one multiple times
-        if url in self.images.keys():
-            return self.images[url]
-        logger.info('Downloading image at %s', url)
-        r = requests.get(url, stream=True)
+        logger.info('Downloading image at %s', image.url)
+        r = requests.get(image.url, stream=True)
         if r.status_code == 200:
-            img_name = url[url.rfind('/') + 1:]
-            img_path = os.path.join(self.temp_dir, img_name)
-            with open(img_path, 'w') as f:
+            with open(image.path, 'w') as f:
                 r.raw.decode_content = True
                 shutil.copyfileobj(r.raw, f)
-            self.images[url] = img_path
-            return img_name
-        return None
+            image.downloaded = True
+        results.append(image)
+
+    def get_chapters_content(self):
+        return sorted(self.processed_chapters.values(),
+                      key=lambda ch: ch['order'])
 
 
 def to_epub(parser):
@@ -180,17 +224,17 @@ def to_epub(parser):
     book.add_author(author)
     chapters_info = []
     chapters_obj = []
-    for idx, (sub_title, html_parsed) in enumerate(parser.chapters_content):
-        file_name = 'chapter_%d.xhtml' % idx
-        c = epub.EpubHtml(title=sub_title, file_name=file_name)
-        c.content = html_parsed
+    for chapter in parser.get_chapters_content():
+        file_name = 'chapter_%d.xhtml' % chapter['order']
+        c = epub.EpubHtml(title=chapter['name'], file_name=file_name)
+        c.content = chapter['soup'].prettify()
         chapters_info.append((file_name, title, ''))
         book.add_item(c)
         chapters_obj.append(c)
-    for image in parser.images.values():
+    for image in parser.processed_images.values():
         img = epub.EpubImage()
-        img.file_name = 'images/%s' % image[image.rfind('/') + 1:]
-        img.content = open(image, 'rb').read()
+        img.file_name = 'images/%s' % image.name
+        img.content = open(image.path, 'rb').read()
         book.add_item(img)
     book.add_item(epub.EpubNcx())
     book.add_item(epub.EpubNav())

@@ -236,6 +236,7 @@ def to_epub(parser):
         img.file_name = 'images/%s' % image.name
         img.content = open(image.path, 'rb').read()
         book.add_item(img)
+    book.toc = (chapters_obj)
     book.add_item(epub.EpubNcx())
     book.add_item(epub.EpubNav())
     book.spine = ['nav']

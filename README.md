@@ -37,8 +37,8 @@ Then wait (depending on the size of the AAR and the quantity of images). The epu
 ## Plans for feature-creep
 
 - Add covers (with the author profile pic ?).
-- Add stylesheet. (Ideally, a different CSS for different games).
-- Add a real TOC.
+- Add stylesheet (ideally, a different CSS for different games).
+- Be able to parse AAR without toc.
 
 ## Licence, smallprints and videotapes
 
